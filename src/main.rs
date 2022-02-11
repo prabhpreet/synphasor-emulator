@@ -5,144 +5,216 @@ use serde_synphasor::frame::commandframe::*;
 use serde_synphasor::frame::dataframe::*;
 use serde_synphasor::ser::SynphasorSerializer;
 use serde_synphasor::synstream::*;
+use serde_synphasor::SynError;
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::f32::consts::PI;
+use std::net::SocketAddr;
+use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, Duration};
+use tokio::sync::mpsc;
+use tokio::time::{interval, Duration};
+mod psmodel;
+use crate::psmodel::*;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
+type TxStore = Arc<Mutex<HashMap<(u16, SocketAddr), tokio::sync::mpsc::Sender<WriteTask>>>>;
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("127.0.0.1:4712").await.unwrap();
+    let pmus = pmu_model();
 
+    let tx_store: TxStore = Arc::new(Mutex::new(HashMap::new()));
+
+    let pmu_data: Vec<(u16, u16, Arc<Vec<u8>>)> = pmus
+        .iter()
+        .map(|pmu| (pmu.idcode, pmu.port, Arc::new(pmu.get_cfg_frame())))
+        .collect();
+
+    let tx_store_publish = tx_store.clone();
+
+    let feeder_publish_handle = tokio::spawn(async move {
+        feeder_publish(tx_store_publish, pmus).await;
+    });
+
+    for (idcode, port, cfg_frame) in pmu_data.into_iter() {
+        let tx_store_publish = tx_store.clone();
+        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
+            .await
+            .unwrap();
+        let cfg_frame = cfg_frame.clone();
+        tokio::spawn(async move {
+            listen(listener, tx_store_publish, idcode, cfg_frame).await;
+        });
+    }
+    feeder_publish_handle.await.unwrap();
+}
+
+async fn listen(listener: TcpListener, tx_store: TxStore, idcode: u16, cfg_frame: Arc<Vec<u8>>) {
     loop {
+        let tx_store_publish = tx_store.clone();
+        let cfg_frame_clone = cfg_frame.clone();
         let (socket, _) = listener.accept().await.unwrap();
-        process(socket).await;
+        let peer_addr = socket.peer_addr().unwrap();
+        let (mut rd, mut wr) = io::split(socket);
+        let (tx_channel, mut rx_channel) = mpsc::channel::<WriteTask>(120);
+
+        tokio::spawn(async move {
+            read_stream(rd, tx_store_publish, tx_channel, idcode, peer_addr).await;
+        });
+
+        tokio::spawn(async move {
+            write_stream(wr, rx_channel, cfg_frame_clone).await;
+        });
     }
 }
 
-async fn process(mut socket: TcpStream) {
-    let mut buffer = [0; 1024];
-    let pmu_dataset = new_pmu_dataset();
-    let serializer = SynphasorSerializer::new(&pmu_dataset);
-    let bytes = serializer.serialize_cfg_3_bytes().unwrap();
-    loop {
-        socket.read(&mut buffer).await.unwrap();
-        let base_frame = SynphasorDeserializer::from_bytes(&buffer).unwrap();
-        println!("{:?}", base_frame);
-        match base_frame.frame {
-            SynFrame::Cmd(v) => match v.command_type {
-                SynCommandEnum::SendCfg3Frame => {
-                    println!("Sending Config Frame");
-                    socket.write_all(&bytes[..]).await;
-                    println!("Sent Config Frame");
-                }
-                SynCommandEnum::TurnOnDataFrames => {
-                    println!("Sending Data frames");
-                    let one_cycle = Duration::from_millis(16);
+enum WriteTask {
+    SendCfg3Frame,
+    SendDataFrame(Vec<u8>),
+}
 
-                    //let soc = 0;
-                    //let fracsec = 0;
-                    while true {
-                        let now = SystemTime::now();
-                        let since_unix_epoch = now
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .expect("Time went backwards");
-                        let in_ms = since_unix_epoch.as_millis();
-                        let in_s = (in_ms / 1000) as u32;
-                        let in_ms = in_ms - ((in_s as u128) * 1000);
-                        let time: SynTime = SynTime {
-                            soc: in_s,
-                            fracsec: in_ms as u32,
-                            leap_second_direction: false,
-                            leap_second_occured: false,
-                            leap_second_pending: false,
-                            time_quality: SynTimeQuality::Locked,
-                        };
-
-                        let data_frame = new_data_frame();
-                        let data_bytes = serializer.serialize_data_bytes(time, data_frame).unwrap();
-                        socket.write(&data_bytes[..]).await;
-                        sleep(Duration::from_millis(16)).await;
-                    }
-                }
-                _ => {}
-            },
+async fn write_stream(
+    mut wr: WriteHalf<TcpStream>,
+    mut rx_channel: mpsc::Receiver<WriteTask>,
+    cfg_frame: Arc<Vec<u8>>,
+) {
+    while let Some(message) = rx_channel.recv().await {
+        match message {
+            WriteTask::SendCfg3Frame => {
+                wr.write_all(&cfg_frame[..]).await;
+            }
+            WriteTask::SendDataFrame(v) => {
+                wr.write_all(&v[..]).await;
+            }
             _ => {}
         }
     }
 }
 
-fn new_pmu_dataset() -> PMUDataSet {
-    let stn = String::from("STN1");
-    let idcode = 2;
-    let g_pmu_id = [0; 16];
-    let pmu_lat: Option<f32> = None;
-    let pmu_lon: Option<f32> = None;
-    let pmu_elev: Option<f32> = None;
-    let svc_class = SynSVCClass::M;
-    let window: i32 = 0;
-    let grp_dly: i32 = 0;
-    let fnom = SynNominalFreq::F60Hz;
-    let data_rate = 0;
-    let cfgcnt = 0;
-
-    let analog_1: SynAnalogChannel =
-        SynAnalogChannel::new(AnalogUnit::AnalogInputRMS, (1.0, 0.0), String::from("RTD1"));
-
-    let digital_1 = DigitalFormat::new(false, true, String::from("52A"));
-
-    let phasor_1 = SynPhasorChannel::new(
-        PhasorUnit::Voltage,
-        (1.0, 0.0),
-        String::from("VA"),
-        PhasorComponent::PhaseA,
-        None,
-    );
-
-    let data_format = SynStreamFormat {
-        freq_dfreq: SynAnalogType::AnalogFormatI16,
-        //analogs: (SynAnalogType::AnalogFormatI16, vec![]),
-        analogs: (SynAnalogType::AnalogFormatI16, vec![analog_1]),
-        //phasors: (SynPhasorType::RectangularPhasorFormatI16, vec![]),
-        phasors: (SynPhasorType::RectangularPhasorFormatI16, vec![phasor_1]),
-        digitals: vec![digital_1],
-        //digitals: vec![],
-    };
-
-    let test_stream = PMUStream {
-        stn,
-        idcode,
-        g_pmu_id,
-        data_format,
-        pmu_lat,
-        pmu_lon,
-        pmu_elev,
-        svc_class,
-        window,
-        grp_dly,
-        fnom,
-        cfgcnt,
-    };
-    PMUDataSet::new(idcode, 1000, vec![test_stream], 60)
+async fn read_stream(
+    mut rd: ReadHalf<TcpStream>,
+    tx_store: TxStore,
+    tx_channel: mpsc::Sender<WriteTask>,
+    idcode: u16,
+    peer_addr: SocketAddr,
+) -> Result<(), SynError> {
+    let mut buffer = [0; 4096];
+    loop {
+        rd.read(&mut buffer).await.unwrap();
+        let base_frame = SynphasorDeserializer::from_bytes(&buffer)?;
+        if (base_frame.idcode == idcode) {
+            match base_frame.frame {
+                SynFrame::Cmd(v) => match v.command_type {
+                    SynCommandEnum::SendCfg3Frame => {
+                        tx_channel.send(WriteTask::SendCfg3Frame).await;
+                    }
+                    SynCommandEnum::TurnOnDataFrames => {
+                        let mut tx_store = tx_store.lock().await;
+                        tx_store.insert((idcode, peer_addr), tx_channel.clone());
+                    }
+                    SynCommandEnum::TurnOffDataFrames => {
+                        let mut tx_store = tx_store.lock().await;
+                        tx_store.remove(&(idcode, peer_addr));
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
 }
 
-fn new_data_frame() -> SynDataFrame {
-    let data = SynData::new(
-        SynDataIndication::PMUDataGood,
-        false,
-        false,
-        false,
-        false,
-        SynPMUTimeQuality::MTElt100ns,
-        SynUnlockedTime::LockedOrUnlockedLT10s,
-        SynTrigger::Reserved,
-        //SynPhasorData::None,
-        SynPhasorData::RectangularPhasorFormatI16(vec![(10i16, 10i16)]),
-        SynFreqData::AnalogFormatI16(0),
-        SynFreqData::AnalogFormatI16(0),
-        SynAnalogData::AnalogFormatI16(vec![132]),
-        vec![true],
-    );
-    SynDataFrame::new(vec![data])
+async fn feeder_publish(tx_store: TxStore, pmus: Vec<PMU>) {
+    //Publish feeder information to all in Tx
+    let mut time = SystemTime::now();
+    //TODO: Base this on data_rate
+    let mut interval = interval(Duration::from_micros(8333));
+    let tx_store_publish = tx_store.clone();
+    loop {
+        {
+            time = time.checked_add(Duration::from_micros(8333)).unwrap();
+            let mut tx_store_publish = tx_store_publish.lock().await;
+
+            let pmu_data_frames: HashMap<u16, Vec<u8>> = pmus
+                .iter()
+                .map(|pmu| (pmu.idcode, pmu.generate_data_frame(time)))
+                .collect();
+
+            for ((idcode, peer_addr), tx) in tx_store_publish.iter() {
+                let data = pmu_data_frames.get(idcode).unwrap();
+                tx.send(WriteTask::SendDataFrame(data.clone())).await;
+            }
+        }
+        interval.tick().await;
+    }
+}
+
+fn pmu_model() -> Vec<PMU> {
+    let calculation = |t: SystemTime| PMUData {
+        va_m: 120.,
+        va_a: 0.,
+        vb_m: 120.,
+        vb_a: -2. * PI / 3.,
+        vc_m: 120.,
+        vc_a: 2. * PI / 3.,
+        ia_m: 5.,
+        ia_a: 0.,
+        ib_m: 5.,
+        ib_a: -2. * PI / 3.,
+        ic_m: 5.,
+        ic_a: 2. * PI / 3.,
+        freq: 60.,
+        df_dt: 0.,
+    };
+
+    vec![
+        PMU::new(
+            "A".to_string(),
+            1,
+            [0; 16],
+            None,
+            None,
+            None,
+            SynSVCClass::M,
+            0,
+            0,
+            SynNominalFreq::F60Hz,
+            120,
+            calculation,
+            4712,
+        ),
+        PMU::new(
+            "B".to_string(),
+            2,
+            [0; 16],
+            None,
+            None,
+            None,
+            SynSVCClass::M,
+            0,
+            0,
+            SynNominalFreq::F60Hz,
+            120,
+            calculation,
+            4713,
+        ),
+        PMU::new(
+            "C".to_string(),
+            3,
+            [0; 16],
+            None,
+            None,
+            None,
+            SynSVCClass::M,
+            0,
+            0,
+            SynNominalFreq::F60Hz,
+            120,
+            calculation,
+            4714,
+        ),
+    ]
 }
