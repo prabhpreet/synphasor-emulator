@@ -1,8 +1,13 @@
+//! Module that defines data structures for PMU Streams, and associated functions for generating
+//! C37.118.2-2011 frames
 use serde_synphasor::{
     frame::baseframe::*, frame::dataframe::*, ser::SynphasorSerializer, synstream::*,
 };
 use std::time::SystemTime;
 
+/// Structure of quantities allowed in PMU Data.
+/// Implementation is limited to polar floating point phasors, floating point frequency quantites, and no PMU analogs/digitals.
+/// If required, this could be configurable in the future- please add a feature request if needed.
 pub struct PMUData {
     pub va_m: f32,
     pub va_a: f32,
@@ -20,6 +25,7 @@ pub struct PMUData {
     pub df_dt: f32,
 }
 
+/// PMU Stream Data Structure
 pub struct PMU {
     calculation: fn(SystemTime) -> PMUData,
     serializer: SynphasorSerializer,
@@ -30,6 +36,7 @@ pub struct PMU {
 }
 
 impl PMU {
+    /// Create new PMU Stream
     pub fn new(
         stn: String,
         idcode: u16,
@@ -135,7 +142,8 @@ impl PMU {
         }
     }
 
-    pub fn generate_data_frame(&self, time: SystemTime) -> Vec<u8> {
+    /// Generate data frames
+    pub(crate) fn generate_data_frame(&self, time: SystemTime) -> Vec<u8> {
         let v = (self.calculation)(time);
         let data = SynData::new(
             SynDataIndication::PMUDataGood,
@@ -179,7 +187,9 @@ impl PMU {
             .serialize_data_bytes(time, data_frame)
             .unwrap()
     }
-    pub fn get_cfg_frame(&self) -> Vec<u8> {
+
+    /// Generate CFG-3 frames
+    pub(crate) fn get_cfg_frame(&self) -> Vec<u8> {
         self.serializer.serialize_cfg_3_bytes().unwrap()
     }
 }
