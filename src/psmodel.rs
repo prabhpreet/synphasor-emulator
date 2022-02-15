@@ -1,5 +1,8 @@
 //! Module that defines data structures for PMU Streams, and associated functions for generating
 //! C37.118.2-2011 frames
+//!
+pub use serde_derive::*;
+use serde_json::Result;
 use serde_synphasor::{
     frame::baseframe::*, frame::dataframe::*, ser::SynphasorSerializer, synstream::*,
 };
@@ -8,6 +11,8 @@ use std::time::SystemTime;
 /// Structure of quantities allowed in PMU Data.
 /// Implementation is limited to polar floating point phasors, floating point frequency quantites, and no PMU analogs/digitals.
 /// If required, this could be configurable in the future- please add a feature request if needed.
+
+#[derive(Serialize, Deserialize)]
 pub struct PMUData {
     pub va_m: f32,
     pub va_a: f32,
@@ -142,8 +147,8 @@ impl PMU {
         }
     }
 
-    /// Generate data frames
-    pub(crate) fn generate_data_frame(&self, time: SystemTime) -> Vec<u8> {
+    /// Generate data frames and JSON output
+    pub(crate) fn generate_pmu_data(&self, time: SystemTime) -> (Vec<u8>, String) {
         let v = (self.calculation)(time);
         let data = SynData::new(
             SynDataIndication::PMUDataGood,
@@ -183,9 +188,13 @@ impl PMU {
         };
 
         let data_frame = SynDataFrame::new(vec![data]);
-        self.serializer
-            .serialize_data_bytes(time, data_frame)
-            .unwrap()
+        //println!("{}", serde_json::to_string(&v).unwrap());
+        (
+            self.serializer
+                .serialize_data_bytes(time, data_frame)
+                .unwrap(),
+            serde_json::to_string(&v).unwrap(),
+        )
     }
 
     /// Generate CFG-3 frames

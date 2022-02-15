@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Synchrophasor Emulator</title>
+    <meta name="description" content="Synchrophasor Emulator">
+
+    <!-- Pico.css (Classless version) -->
+    <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@latest/css/pico.classless.min.css">
+
+    <script>
+        window.setInterval(function () {
+            reloadIFrame()
+        }, 3000);
+
+        function reloadIFrame() {
+            console.log('reloading..');
+            document.getElementById('iframeapi').contentWindow.location.reload();
+        }
+    </script>
+
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header>
+        <hgroup>
+            <h1>Synchrophasor Emulator</h1>
+            <h2>Simulate C37.118.2 Synchrophasor PMUs using a phasor model. Intended for testing control based
+                applications
+                using Synchrophasors</h2>
+        </hgroup>
+        <nav>
+            <ul>
+                <li><a href="#try">Try</a></li>
+                <li><a href="https://hub.docker.com/r/prsinghdua/synphasor-emulator">Docker image</a></li>
+                <li><a href="/synphasor_emulator/index.html">Docs</a></li>
+                <li><a href="#api">Live API</a></li>
+                <li><a href="https://github.com/prabhpreet/synphasor-emulator">Source Code</a></li>
+            </ul>
+        </nav>
+    </header><!-- ./ Header -->
+
+    <!-- Main -->
+    <main style="padding:0">
+        <!-- Typography-->
+        <section id="try">
+            <!-- Inline text elements-->
+            <h3>Give it a try!</h3>
+            <p>Connect with a Synchrophasor client connected to the internet! For a synchrophasor client, <a
+                    href="https://github.com/GridProtectionAlliance/PMUConnectionTester">PMU
+                    Connection Tester</a> can be used.</p>
+            <p>Or download the <a href="https://hub.docker.com/r/prsinghdua/synphasor-emulator">docker image</a></p>
+            <figure>
+                <table>
+                    <tbody>
+                        <tr>
+                            <td>Phasor Name</td>
+                            <td>IP/Port</td>
+                            <td>Docker Image Port</td>
+                            <td>Device ID Code</td>
+                        </tr>
+                        <tr>
+                            <td>Phasor 1</td>
+                            <td>3.89.183.161:4712</td>
+                            <td>4712</td>
+                            <td>1</td>
+                        </tr>
+                        <tr>
+                            <td>Phasor 2</td>
+                            <td>3.89.183.161:4713</td>
+                            <td>4713</td>
+                            <td>2</td>
+                        </tr>
+                        <tr>
+                            <td>Phasor 3</td>
+                            <td>3.89.183.161:4714</td>
+                            <td>4714</td>
+                            <td>3</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </figure>
+        </section><!-- ./ Typography-->
+
+        <!-- Article-->
+        <article id="api">
+            <h2>Live API</h2>
+            <p>Connect at <code><a href="/api">http://synphasoremulator.hopto.org/api</a> </code></p>
+            <iframe id="iframeapi" src="/api" title="Live API" style="font-size:1.2em;"></iframe>
+        </article><!-- ./ Article-->
+    </main><!-- ./ Main -->
+
+    <!-- Footer -->
+    <footer>
+        <small>Built with <a href="https://www.rust-lang.org/">Rust</a>, <a href="https://tokio.rs/">Tokio</a> and <a
+                href="https://github.com/seanmonstar/warp">Warp</a> • <a
+                href="https://github.com/prabhpreet/synphasor-emulator">Source code</a></small>
+    </footer><!-- ./ Footer -->
+
+    <!-- Minimal theme switcher -->
+    <script src="../js/minimal-theme-switcher.js"></script>
+
+    <script>
+        // Set indeterminate progress bar
+        document.getElementById('progress-2').indeterminate = true;
+    </script>
+
+</body>
+
+</html>

@@ -8,3 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 serde-synphasor = {path = "../serde-synphasor"}
+warp = "0.3.2"
+serde_json = "1.0.79"
+serde = "1.0.136"
+serde_derive = "1.0.136"
